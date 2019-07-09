@@ -73,7 +73,8 @@ def min_x_max(min_value, x, max_value):
 def timestamp_ms():
     return int(round(time.time() * 1000))
 
-
+def timestamp_us():
+    return int(round(time.time()* 1000 *1000))
 def make_sure_path_exists(path):
     try:
         os.makedirs(path)
@@ -329,7 +330,7 @@ class Config(object):
     except NoOptionError:
         state_map = {
         'rtt':True,
-        'delay':False,
+        'delay':True,
         'send_rate':True,
         'delivery_rate':True,
         'loss_rate':True,
@@ -339,6 +340,10 @@ class Config(object):
         his_range =  ast.literal_eval(cfg.get('global', 'his_range'))
     except NoOptionError:
         his_range = [x for x in range(0,state_his)]
+    try:
+        mcall_step_len = float(cfg.get('global', 'mcall_step_len'))
+    except NoOptionError:
+        mcall_step_len = 10.0
     # env (mininet) parameter set and traffic pattern for train mode
     total_env_set_train = []
     total_tpg_set_train = []

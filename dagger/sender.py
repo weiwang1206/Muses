@@ -309,6 +309,7 @@ def main():
         sender = Sender(args.ip, args.port)
         sender.set_policy(policy)
         sender.policy.set_env_name('env_60_5ms')
+        sender.policy.set_sender(sender)
         sender.run()
     except KeyboardInterrupt:
         sys.stderr.write('[sender] stopped\n')
