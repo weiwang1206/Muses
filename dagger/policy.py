@@ -146,6 +146,8 @@ class Policy(object):
         self.m_timestamp = timestamp_us()
         self.d_stage =True
         self.loss_num =0
+        self.thut_plat = 0
+        self.prev_thut = -1.0
         #self.rand_rate = 0.05
         print('policy config action rand_rate {}'.format(self.rand_rate))
         self.cwnd_ewma = Config.cwnd_ewma
@@ -220,9 +222,7 @@ class Policy(object):
             #sys.stderr.write('[{}]detect pakcet loss at {}-{}={}\n'.format(self.loss_num,self.exp_seq,ack.seq_num,ack.seq_num-self.exp_seq))
             self.loss_num +=1
             self.f_loss = True
-        #loss_rate = 1.0 if self.exp_seq + 2 < ack.seq_num else 0.0 
-        S_loss =self.__cal_loss_rate()
-        loss_rate = 1.0 if S_loss>0 else 0.0  
+     
         
         left_delay = 0
         #s_loss =self.__cal_loss_rate()
@@ -236,23 +236,16 @@ class Policy(object):
             self.history_delay.append(queuing_delay) 
             self.history_avg_delay = self.history_avg_delay - left_delay/10.0 + queuing_delay/10.0
             #print('pop left {} ,put right {} '.format(left_delay,queuing_delay))
-        if len(self.history_loss) == 0:
-            for _ in xrange(20):
-                self.history_loss.append(0.0)
-                self.history_avg_loss = 0.0
-        elif len(self.history_loss) == 20:
-            left_loss = self.history_loss.popleft()
-            self.history_loss.append(loss_rate) 
-            self.history_avg_loss = self.history_avg_loss - left_loss/20.0 + loss_rate/20.0
+
 
         if self.slow_start :
-            self.cwnd += 2 if self.d_stage or self.cwnd < self.freeze_cwnd else 2*0.3 
-            #self.cwnd += 2
-            #if self.f_loss:
-            #sys.stderr.write('iter[{}]:seq {},ack {}, cwnd {:.2f},fr_cwnd {:.2f},min_rtt {:.2f},send {:.2f},delivery {:.2f},rtt {:.2f},q_delay {:.2f},avg_delay {:.2f},loss {:.6f},avg_loss {:.2f}\n'.format(self.slow_iter,
-            #        self.sender.seq_num,ack.seq_num,self.cwnd, self.freeze_cwnd ,self.min_rtt,
-            #        self.send_rate_ewma,self.delivery_rate_ewma,self.rtt_ewma,queuing_delay,self.history_avg_delay,S_loss,self.history_avg_loss))  
-               # self.f_loss = False
+            self.cwnd += 2  if self.d_stage  else 2*0.15
+            S_loss =self.__cal_loss_rate()
+            #sys.stderr.write('iter[{}]:seq {},ack {}, cwnd {:.2f},fr_cwnd {:.2f},min_rtt {:.2f},max_rtt {:.2f},send {:.2f},delivery {:.2f},max_s {:.2f},max_d {:.2f},'
+            #            'rtt {:.2f},q_delay {:.2f},avg_delay {:.2f},thput_plat {}\n'.format(self.slow_iter,
+            #        self.sender.seq_num,ack.seq_num,self.cwnd, self.freeze_cwnd ,self.min_rtt,self.max_rtt,
+            #        self.send_rate_ewma,self.delivery_rate_ewma,  self.max_send_rate_ewma,self.max_delivery_rate_ewma,
+            #        self.rtt_ewma,queuing_delay,self.history_avg_delay,self.thut_plat)) 
              
         #elif not self.first_loss:
         #    print('iter[{}]:seq {},ack {}, cwnd {:.4f},min_rtt {:.4f},send {:.4f},delivery {:.4f},delay_ewma {:.4f},q_delay {:.4f},avg_delay {:.4f}'.format(self.slow_iter,
@@ -260,30 +253,27 @@ class Policy(object):
         #        self.send_rate_ewma,self.delivery_rate_ewma,self.delay_ewma,queuing_delay,self.history_avg_delay))              
 
         #break up slow start
-        if self.slow_start and  (self.exp_seq + 4 < ack.seq_num or  S_loss > 0.5 )and self.history_avg_delay / self.min_rtt > 0.01:
+        if self.slow_start and   (self.exp_seq + 6 < ack.seq_num or  S_loss > 0.6  or self.thut_plat >= 3 ):
             self.slow_start = False
-            if self.d_stage:
-                max_cwnd = self.cwnd/2  
-            else:
-                max_cwnd = max(self.freeze_cwnd, (self.cwnd - self.freeze_cwnd)*Config.fri +  self.freeze_cwnd)
-            #max_cwnd = self.cwnd /2
-            self.max_bdp_norm = max_cwnd*Message.total_size*8/(Policy.max_rtt*Policy.max_delivery_rate*10**3)
-            #sys.stderr.write('iter[{}]:seq {},ack {}, cwnd {:.4f},fr_cwnd {:.4f},min_rtt {:.4f},send {:.4f},delivery {:.4f},rtt {:.4f},q_delay {:.4f},avg_delay {:.4f},loss {:.6f},avg_loss {:.4f}\n'.format(self.slow_iter,
-            #    self.sender.seq_num,ack.seq_num,self.cwnd,self.freeze_cwnd,self.min_rtt,
-            #    self.send_rate_ewma,self.delivery_rate_ewma,self.rtt_ewma,queuing_delay,self.history_avg_delay,S_loss,self.history_avg_loss))  
-            #sys.stderr.write('slow start compute max_cwnd {},max_bdp_norm {}\n'.format(max_cwnd,self.max_bdp_norm))
-            self.cwnd = self.freeze_cwnd
+            self.max_bdp_norm = self.min_rtt * self.max_delivery_rate_ewma / (Policy.max_rtt*Policy.max_delivery_rate)
+            self.cwnd =   self.max_bdp_norm * (Policy.max_rtt*Policy.max_delivery_rate*10**3) / (Message.total_size*8)           
+            #sys.stderr.write('iter[{}]:seq {},ack {}, cwnd {:.2f},fr_cwnd {:.2f},min_rtt {:.2f},max_rtt {:.2f},send {:.2f},delivery {:.2f},max_s {:.2f},max_d {:.2f},'
+            #            'rtt {:.2f},q_delay {:.2f},avg_delay {:.2f},thput_plat {}\n'.format(self.slow_iter,
+            #        self.sender.seq_num,ack.seq_num,self.cwnd, self.freeze_cwnd ,self.min_rtt,self.max_rtt,
+            #        self.send_rate_ewma,self.delivery_rate_ewma,  self.max_send_rate_ewma,self.max_delivery_rate_ewma,
+            #        self.rtt_ewma,queuing_delay,self.history_avg_delay,self.thut_plat)) 
+            #sys.stderr.write('slow start compute max_cwnd {},max_bdp_norm {}\n'.format(self.cwnd,self.max_bdp_norm))
+
         #slow start congestion recvory
         elif self.slow_start and self.d_stage and self.history_avg_delay / self.min_rtt > 0.05:
             self.d_stage = False
-            self.freeze_cwnd = self.cwnd/2
-            self.cwnd = self.freeze_cwnd
+            self.cwnd = self.cwnd / 2
             #sys.stderr.write('iter[{}]:seq {},ack {}, cwnd {:.4f},fr_cwnd {:.4f},min_rtt {:.4f},send {:.4f},delivery {:.4f},rtt {:.4f},q_delay {:.4f},avg_delay {:.4f},loss {:.6f},avg_loss {:.4f}\n'.format(self.slow_iter,
             #    self.sender.seq_num,ack.seq_num,self.cwnd, self.freeze_cwnd ,self.min_rtt,
             #    self.send_rate_ewma,self.delivery_rate_ewma,self.rtt_ewma,queuing_delay,self.history_avg_delay,S_loss,self.history_avg_loss))  
             #sys.stderr.write('slow start compute freeze_cwnd {}\n'.format(self.freeze_cwnd))
-        self.exp_seq = ack.seq_num
 
+        self.exp_seq = ack.seq_num
         if not self.slow_start and Config.slow_start:
             try_bdp_norm = (self.min_rtt*self.delivery_rate_ewma*1.1)/(Policy.max_rtt*Policy.max_delivery_rate)
             if try_bdp_norm > self.max_bdp_norm:
@@ -352,6 +342,12 @@ class Policy(object):
             if self.perf_client:
                 self.perf_client.collect_perf_data(self)
                 self.prev_cwnd = self.cwnd
+            if  self.prev_thut * 1.1 > self.delivery_rate_ewma:
+                self.thut_plat +=1
+            else:
+                self.thut_plat =0
+            self.prev_thut = self.delivery_rate_ewma
+
             self.__reset_step()
             return 
 
@@ -519,7 +515,10 @@ class Policy(object):
                 threshold = max(self.min_rtt, Policy.min_step_len)
                 self.start_phase_cnt += 1
             else:
-                threshold = max(self.min_rtt / Policy.action_frequency, Policy.min_step_len)
+                if self.slow_start:
+                    threshold = self.min_rtt
+                else:
+                    threshold = max(self.min_rtt / Policy.action_frequency, Policy.min_step_len)
 
             return duration >= threshold
 
@@ -608,7 +607,7 @@ class Policy(object):
         print('policy config  env {}'.format(env_name))
         (self.env_bandwidth,self.env_delay) = map(lambda x:float(x),env_name.replace('env_','').replace('ms','').split('_'))
         self.max_bdp_norm = (self.env_bandwidth*self.env_delay*2)/(Policy.max_send_rate*Policy.max_rtt)
-        print('policy config  bandwidth {},rtt {},bdp_norm {}'.format(self.env_bandwidth,self.env_delay,self.max_bdp_norm))
-    
+        max_cwnd = self.max_bdp_norm * (Policy.max_rtt*Policy.max_delivery_rate*10**3)/(Message.total_size*8) 
+        #sys.stderr.write('policy config  bandwidth {},rtt {},bdp_norm {},max_cwnd {}\n'.format(self.env_bandwidth,self.env_delay*2,self.max_bdp_norm,max_cwnd))  
     def set_sender(self,sender):
         self.sender = sender
